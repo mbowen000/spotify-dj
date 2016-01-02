@@ -16,6 +16,8 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 
+import kaaes.spotify.webapi.android.models.ArtistSimple;
+
 /**
  * Created by mike on 1/1/16.
  */
@@ -70,6 +72,16 @@ public class Track {
         JSONObject reqBody = new JSONObject();
         try {
             reqBody.put("uri", track.uri);
+            reqBody.put("name", track.name);
+
+            JSONArray artistArray = new JSONArray();
+            for(ArtistSimple artist : track.artists) {
+                JSONObject artistObject = new JSONObject();
+                artistObject.put("name", artist.name);
+                artistArray.put(artistObject);
+            }
+
+            reqBody.put("artists", artistArray);
         }
         catch(JSONException jse) {
             jse.printStackTrace();

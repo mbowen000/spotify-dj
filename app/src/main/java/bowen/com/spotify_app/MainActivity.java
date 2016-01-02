@@ -22,6 +22,9 @@ import com.android.volley.RequestQueue;
 import com.android.volley.VolleyError;
 import com.android.volley.toolbox.StringRequest;
 import com.android.volley.toolbox.Volley;
+import com.github.nkzawa.emitter.Emitter;
+import com.github.nkzawa.emitter.Emitter.Listener;
+import com.github.nkzawa.socketio.client.Socket;
 import com.spotify.sdk.android.authentication.AuthenticationClient;
 import com.spotify.sdk.android.authentication.AuthenticationRequest;
 import com.spotify.sdk.android.authentication.AuthenticationResponse;
@@ -37,6 +40,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.lang.reflect.Array;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 
 import kaaes.spotify.webapi.android.SpotifyApi;
@@ -51,6 +55,7 @@ import kaaes.spotify.webapi.android.models.PlaylistsPager;
 import kaaes.spotify.webapi.android.models.Tracks;
 import retrofit.RetrofitError;
 import retrofit.client.Response;
+import com.github.nkzawa.socketio.client.IO;
 
 public class MainActivity extends AppCompatActivity implements
         PlayerNotificationCallback, ConnectionStateCallback {
@@ -76,6 +81,14 @@ public class MainActivity extends AppCompatActivity implements
     private int currentTrackIdx = 0;
 
     private ArrayAdapter<String> trackAdapter;
+
+
+    private Socket mSocket;
+    {
+        try {
+            mSocket = IO.socket("http://192.168.0.106:3000");
+        } catch (URISyntaxException e) {}
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -109,8 +122,35 @@ public class MainActivity extends AppCompatActivity implements
             }
         }, this);
 
-
+        mSocket.on("trackAdded", onNewMessage);
+        mSocket.connect();
     }
+
+    private Listener onNewMessage = new Listener() {
+        @Override
+        public void call(final Object... args) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    JSONObject data = (JSONObject) args[0];
+                    String uri;
+                    try {
+                        uri = data.getString("uri");
+
+                    } catch (JSONException e) {
+                        return;
+                    }
+
+                    refreshResults();
+                    Toast socketToast = Toast.makeText(getApplicationContext(), "New Track Recieved: " + uri, Toast.LENGTH_SHORT);
+                    socketToast.show();
+                    // add the message to view
+                    //addMessage(username, message);
+
+                }
+            });
+        }
+    };
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent intent) {
