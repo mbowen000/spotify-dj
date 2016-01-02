@@ -1,0 +1,287 @@
+package bowen.com.spotify_app;
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Bundle;
+import android.support.v7.app.AppCompatActivity;
+import android.support.v7.util.SortedList;
+import android.support.v7.widget.Toolbar;
+import android.util.Log;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.widget.ArrayAdapter;
+import android.widget.ListView;
+import android.widget.Toast;
+
+
+import com.android.volley.Request;
+import com.android.volley.RequestQueue;
+import com.android.volley.VolleyError;
+import com.android.volley.toolbox.StringRequest;
+import com.android.volley.toolbox.Volley;
+import com.spotify.sdk.android.authentication.AuthenticationClient;
+import com.spotify.sdk.android.authentication.AuthenticationRequest;
+import com.spotify.sdk.android.authentication.AuthenticationResponse;
+import com.spotify.sdk.android.player.Config;
+import com.spotify.sdk.android.player.Spotify;
+import com.spotify.sdk.android.player.ConnectionStateCallback;
+import com.spotify.sdk.android.player.Player;
+import com.spotify.sdk.android.player.PlayerNotificationCallback;
+import com.spotify.sdk.android.player.PlayerState;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.lang.reflect.Array;
+import java.util.ArrayList;
+
+import kaaes.spotify.webapi.android.SpotifyApi;
+import kaaes.spotify.webapi.android.SpotifyCallback;
+import kaaes.spotify.webapi.android.SpotifyError;
+import kaaes.spotify.webapi.android.SpotifyService;
+import kaaes.spotify.webapi.android.models.Album;
+import kaaes.spotify.webapi.android.models.Pager;
+import kaaes.spotify.webapi.android.models.Playlist;
+import kaaes.spotify.webapi.android.models.PlaylistTrack;
+import kaaes.spotify.webapi.android.models.PlaylistsPager;
+import kaaes.spotify.webapi.android.models.Tracks;
+import retrofit.RetrofitError;
+import retrofit.client.Response;
+
+public class MainActivity extends AppCompatActivity implements
+        PlayerNotificationCallback, ConnectionStateCallback {
+
+    // TODO: Replace with your client ID
+    private static final String CLIENT_ID = "5cc6f71703df4006b7d77b7e2dd85d97";
+    // TODO: Replace with your redirect URI
+    private static final String REDIRECT_URI = "mike://callback";
+
+    private Player mPlayer;
+
+    private PlayerState mPlayerState;
+
+    //private SpotifyConnection spotifyConnection = new SpotifyConnection();
+
+    private String accessToken;
+    // Request code that will be used to verify if the result comes from correct activity
+    // Can be any integer
+    private static final int REQUEST_CODE = 1337;
+
+    private ArrayList<String> trackList = new ArrayList<String>();
+
+    private int currentTrackIdx = 0;
+
+    private ArrayAdapter<String> trackAdapter;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        setContentView(R.layout.activity_main);
+
+        Toolbar myToolbar = (Toolbar) findViewById(R.id.my_toolbar);
+        setSupportActionBar(myToolbar);
+        myToolbar.showContextMenu();
+
+        AuthenticationRequest.Builder builder = new AuthenticationRequest.Builder(CLIENT_ID,
+                AuthenticationResponse.Type.TOKEN,
+                REDIRECT_URI);
+        builder.setScopes(new String[]{"user-read-private", "streaming"});
+        AuthenticationRequest request = builder.build();
+
+        AuthenticationClient.openLoginActivity(this, REQUEST_CODE, request);
+
+        SpotifyConnection.apiConnection = new SpotifyApi();
+
+        Track.getCurrentTracks(new VolleyCallback() {
+            @Override
+            public void onSuccess(ArrayList<String> result) {
+                trackList = result;
+                trackAdapter = new ArrayAdapter<String>(getApplicationContext(),
+                        android.R.layout.simple_list_item_1, result);
+
+                ListView listView = (ListView) findViewById(R.id.listView);
+                listView.setAdapter(trackAdapter);
+            }
+        }, this);
+
+
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent intent) {
+        super.onActivityResult(requestCode, resultCode, intent);
+
+        // Check if result comes from the correct activity
+        if (requestCode == REQUEST_CODE) {
+            AuthenticationResponse response = AuthenticationClient.getResponse(resultCode, intent);
+            if (response.getType() == AuthenticationResponse.Type.TOKEN) {
+                Config playerConfig = new Config(this, response.getAccessToken(), CLIENT_ID);
+                accessToken = response.getAccessToken();
+
+                SpotifyConnection.apiConnection.setAccessToken(response.getAccessToken());
+
+                SpotifyService spotify = SpotifyConnection.apiConnection.getService();
+
+                Spotify.getPlayer(playerConfig, this, new Player.InitializationObserver() {
+                    @Override
+                    public void onInitialized(Player player) {
+                        mPlayer = player;
+                        mPlayer.addConnectionStateCallback(MainActivity.this);
+                        mPlayer.addPlayerNotificationCallback(MainActivity.this);
+                        //mPlayer.play("spotify:track:64EtCN7vOk8c8Pu58VlmX3");
+
+//                        if(trackList.size() > 0) {
+//                            mPlayer.play(trackList.get(0));
+//                        }
+
+                    }
+
+                    @Override
+                    public void onError(Throwable throwable) {
+                        Log.e("MainActivity", "Could not initialize player: " + throwable.getMessage());
+                    }
+                });
+            }
+        }
+    }
+
+    @Override
+    public void onLoggedIn() {
+        Log.d("MainActivity", "User logged in");
+    }
+
+    @Override
+    public void onLoggedOut() {
+        Log.d("MainActivity", "User logged out");
+    }
+
+    @Override
+    public void onLoginFailed(Throwable error) {
+        Log.d("MainActivity", "Login failed");
+    }
+
+    @Override
+    public void onTemporaryError() {
+        Log.d("MainActivity", "Temporary error occurred");
+    }
+
+    @Override
+    public void onConnectionMessage(String message) {
+        Log.d("MainActivity", "Received connection message: " + message);
+    }
+
+    @Override
+    public void onPlaybackEvent(EventType eventType, PlayerState playerState) {
+        Log.d("MainActivity", "Playback event received: " + eventType.name());
+        Context context = getApplicationContext();
+        CharSequence text = eventType.name();
+        int duration = Toast.LENGTH_SHORT;
+
+        Toast toast = Toast.makeText(context, text, duration);
+        toast.show();
+
+        mPlayerState = playerState;
+
+        if(eventType.equals(EventType.TRACK_END)) {
+            if(currentTrackIdx < trackAdapter.getCount()-1) {
+
+                startPlayback(currentTrackIdx + 1);
+            }
+            else {
+                Toast endToast = Toast.makeText(context, "End of List Reached", Toast.LENGTH_SHORT);
+                endToast.show();
+            }
+        }
+    }
+
+    // todo: this is just for testing, its all screwy - we need to define how the app state changes
+    public void play(View view) {
+        if(mPlayer.isInitialized()) {
+            if(mPlayerState != null && mPlayerState.playing) {
+                mPlayer.pause();
+
+            }
+            else {
+//                Track.getCurrentTracks(new VolleyCallback() {
+//                    @Override
+//                    public void onSuccess(ArrayList<String> result) {
+//                        trackAdapter.clear();
+//                        trackAdapter.addAll(result);
+//                        // start playing the first track (if there is one)
+//                        if(trackAdapter.getCount() > 0) {
+//                            mPlayer.play(trackAdapter.getItem(0));
+//                        }
+//                    }
+//                }, this);
+                if(mPlayerState != null) {
+                    mPlayer.resume();
+                }
+                else {
+                    if(trackAdapter.getCount() > 0) {
+                        startPlayback(0);
+                    }
+                }
+            }
+
+
+
+        }
+    }
+
+    private void refreshResults() {
+        Track.getCurrentTracks(new VolleyCallback() {
+            @Override
+            public void onSuccess(ArrayList<String> result) {
+                trackAdapter.clear();
+                trackAdapter.addAll(result);
+                // start playing the first track (if there is one)
+                if(trackAdapter.getCount() > 0) {
+                    //mPlayer.play(trackAdapter.getItem(0));
+                    //startPlayback(0);
+                }
+            }
+        }, this);
+    }
+
+    private void startPlayback(int trackNo) {
+        mPlayer.play(trackAdapter.getItem(trackNo));
+        currentTrackIdx = trackNo;
+    }
+
+
+    @Override
+    public void onPlaybackError(ErrorType errorType, String errorDetails) {
+        Log.d("MainActivity", "Playback error received: " + errorType.name());
+    }
+
+    @Override
+    protected void onDestroy() {
+        Spotify.destroyPlayer(this);
+        super.onDestroy();
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        MenuInflater inflater = getMenuInflater();
+        inflater.inflate(R.menu.main, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch(item.getItemId()) {
+            case R.id.action_search:
+                this.onSearchRequested();
+            case R.id.action_refresh:
+                this.refreshResults();
+            default:
+                return super.onOptionsItemSelected(item);
+        }
+    }
+
+}
