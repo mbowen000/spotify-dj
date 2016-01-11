@@ -1,8 +1,11 @@
 package bowen.com.spotify_app;
 import android.app.Activity;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.net.Uri;
+import android.net.wifi.p2p.WifiP2pManager;
 import android.os.Bundle;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.util.SortedList;
@@ -12,6 +15,7 @@ import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.ListView;
 import android.widget.Toast;
@@ -42,7 +46,9 @@ import org.json.JSONObject;
 import java.lang.reflect.Array;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
+import java.util.List;
 
+import bowen.com.spotify_app.models.TrackView;
 import kaaes.spotify.webapi.android.SpotifyApi;
 import kaaes.spotify.webapi.android.SpotifyCallback;
 import kaaes.spotify.webapi.android.SpotifyError;
@@ -65,6 +71,8 @@ public class MainActivity extends AppCompatActivity implements
     // TODO: Replace with your redirect URI
     private static final String REDIRECT_URI = "mike://callback";
 
+    public static final String HOST_URI = "http://teamtunes.herokuapp.com";
+
     private Player mPlayer;
 
     private PlayerState mPlayerState;
@@ -76,17 +84,23 @@ public class MainActivity extends AppCompatActivity implements
     // Can be any integer
     private static final int REQUEST_CODE = 1337;
 
-    private ArrayList<String> trackList = new ArrayList<String>();
+    private List<TrackView> trackList = new ArrayList<TrackView>();
 
     private int currentTrackIdx = 0;
 
-    private ArrayAdapter<String> trackAdapter;
+    private ArrayAdapter<TrackView> trackAdapter;
 
+    // wifi direct related stuff
+    public static boolean isWifiDirectSupported = false;
+    WifiP2pManager mManager;
+    WifiP2pManager.Channel mChannel;
+    BroadcastReceiver mReceiver;
+    IntentFilter mIntentFilter;
 
     private Socket mSocket;
     {
         try {
-            mSocket = IO.socket("http://192.168.0.106:3000");
+            mSocket = IO.socket(MainActivity.HOST_URI);
         } catch (URISyntaxException e) {}
     }
 
@@ -110,20 +124,52 @@ public class MainActivity extends AppCompatActivity implements
 
         SpotifyConnection.apiConnection = new SpotifyApi();
 
-        Track.getCurrentTracks(new VolleyCallback() {
+        Track.getCurrentTracks(new VolleyCallbackArray() {
             @Override
-            public void onSuccess(ArrayList<String> result) {
+            public void onSuccess(List<TrackView> result) {
                 trackList = result;
-                trackAdapter = new ArrayAdapter<String>(getApplicationContext(),
-                        android.R.layout.simple_list_item_1, result);
+                List<TrackView> listForAdapter = new ArrayList<TrackView>();
+                trackAdapter = new ArrayAdapter(getApplicationContext(),
+                        android.R.layout.simple_list_item_1, listForAdapter);
 
                 ListView listView = (ListView) findViewById(R.id.listView);
                 listView.setAdapter(trackAdapter);
+                listView.setOnItemClickListener(itemClickedHandler);
             }
         }, this);
 
+        mSocket.on("trackUpvoted", onNewMessage);
         mSocket.on("trackAdded", onNewMessage);
+        mSocket.on("server-start", onServerStart);
         mSocket.connect();
+
+        // wifi-direct related stuff
+        mManager = (WifiP2pManager) getSystemService(Context.WIFI_P2P_SERVICE);
+        mChannel = mManager.initialize(this, getMainLooper(), null);
+        mReceiver = new WifiDirectBroadcastReceiver(mManager, mChannel, this);
+
+        mIntentFilter = new IntentFilter();
+        mIntentFilter.addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION);
+        mIntentFilter.addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION);
+        mIntentFilter.addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION);
+        mIntentFilter.addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION);
+
+        mManager.discoverPeers(mChannel, new WifiP2pManager.ActionListener() {
+
+            @Override
+            public void onSuccess() {
+                Toast peersToast = Toast.makeText(getApplicationContext(), "Looking for peers!", Toast.LENGTH_LONG);
+                peersToast.show();
+            }
+
+            @Override
+            public void onFailure(int reason) {
+                Toast peersToast = Toast.makeText(getApplicationContext(), "Peer detection failed.", Toast.LENGTH_LONG);
+                peersToast.show();
+            }
+        });
+
+
     }
 
     private Listener onNewMessage = new Listener() {
@@ -132,21 +178,38 @@ public class MainActivity extends AppCompatActivity implements
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    JSONObject data = (JSONObject) args[0];
-                    String uri;
-                    try {
-                        uri = data.getString("uri");
+                    if(args.length > 0) {
+                        JSONObject data = (JSONObject) args[0];
+                        String uri;
+                        try {
+                            uri = data.getString("uri");
 
-                    } catch (JSONException e) {
-                        return;
+                        } catch (JSONException e) {
+                            return;
+                        }
+
+                        Toast socketToast = Toast.makeText(getApplicationContext(), "New Track Recieved: " + uri, Toast.LENGTH_SHORT);
+                        socketToast.show();
                     }
 
                     refreshResults();
-                    Toast socketToast = Toast.makeText(getApplicationContext(), "New Track Recieved: " + uri, Toast.LENGTH_SHORT);
-                    socketToast.show();
                     // add the message to view
                     //addMessage(username, message);
 
+                }
+            });
+        }
+    };
+
+    private Listener onServerStart = new Listener() {
+        @Override
+        public void call(final Object... args) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    refreshResults();
+                    Toast socketToast = Toast.makeText(getApplicationContext(), "Server Started Up", Toast.LENGTH_SHORT);
+                    socketToast.show();
                 }
             });
         }
@@ -227,10 +290,11 @@ public class MainActivity extends AppCompatActivity implements
 
         mPlayerState = playerState;
 
-        if(eventType.equals(EventType.TRACK_END)) {
+
+        if(eventType.equals(EventType.END_OF_CONTEXT)) {
             if(currentTrackIdx < trackAdapter.getCount()-1) {
 
-                startPlayback(currentTrackIdx + 1);
+                startPlayback(0);
             }
             else {
                 Toast endToast = Toast.makeText(context, "End of List Reached", Toast.LENGTH_SHORT);
@@ -274,13 +338,13 @@ public class MainActivity extends AppCompatActivity implements
     }
 
     private void refreshResults() {
-        Track.getCurrentTracks(new VolleyCallback() {
+        Track.getCurrentTracks(new VolleyCallbackArray() {
             @Override
-            public void onSuccess(ArrayList<String> result) {
+            public void onSuccess(List<TrackView> result) {
                 trackAdapter.clear();
                 trackAdapter.addAll(result);
                 // start playing the first track (if there is one)
-                if(trackAdapter.getCount() > 0) {
+                if (trackAdapter.getCount() > 0) {
                     //mPlayer.play(trackAdapter.getItem(0));
                     //startPlayback(0);
                 }
@@ -289,9 +353,26 @@ public class MainActivity extends AppCompatActivity implements
     }
 
     private void startPlayback(int trackNo) {
-        mPlayer.play(trackAdapter.getItem(trackNo));
+        Log.d("Starting Playback trk: ", String.valueOf(trackNo));
+        mPlayer.play(trackAdapter.getItem(trackNo).getUri());
         currentTrackIdx = trackNo;
+
+        // send a play notification to the server
+        Track.playTrack(trackNo, this, new VolleyCallback() {
+            @Override
+            public void onSuccess(ArrayList<String> result) {
+                // todo: handle this
+                refreshResults();
+            }
+        });
     }
+
+    private AdapterView.OnItemClickListener itemClickedHandler = new AdapterView.OnItemClickListener() {
+        public void onItemClick(AdapterView parent, View v, int position, long id) {
+            // start playback of the selected track.
+            startPlayback(position);
+        }
+    };
 
 
     @Override
@@ -319,9 +400,28 @@ public class MainActivity extends AppCompatActivity implements
                 this.onSearchRequested();
             case R.id.action_refresh:
                 this.refreshResults();
+            case R.id.action_settings:
+                Intent intent = new Intent(this, AppSettingsActivity.class);
+                startActivity(intent);
+            case R.id.action_peers:
+                Intent peersIntent = new Intent(this, PeersActivity.class);
+                startActivity(peersIntent);
             default:
                 return super.onOptionsItemSelected(item);
         }
     }
 
+    // wifi direct related
+    /* register the broadcast receiver with the intent values to be matched */
+    @Override
+    protected void onResume() {
+        super.onResume();
+        registerReceiver(mReceiver, mIntentFilter);
+    }
+    /* unregister the broadcast receiver */
+    @Override
+    protected void onPause() {
+        super.onPause();
+        unregisterReceiver(mReceiver);
+    }
 }

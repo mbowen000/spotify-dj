@@ -11,4 +11,15 @@
         android:title="Refresh List"
         app:showAsAction="never"
         />
+
+    <item
+        android:id="@+id/action_settings"
+        android:title="Settings"
+        app:showAsAction="never"
+        />
+
+    <item
+        android:id="@+id/action_peers"
+        android:title="Peers"
+        app:showAsAction="never"/>
 </menu>
